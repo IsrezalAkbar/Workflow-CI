@@ -32,9 +32,3 @@ jobs:
           cd MLProject
           mlflow run . --env-manager=local
 
-      - name: Upload mlruns artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: mlruns
-          path: MLProject/mlruns/
-          retention-days: 7
