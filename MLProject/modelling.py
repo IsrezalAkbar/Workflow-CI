@@ -57,8 +57,8 @@ print(f"\n✔ Data loaded — Train: {X_train.shape}, Test: {X_test.shape}")
 # ─────────────────────────────────────────
 mlflow.set_experiment("Wine_Quality_CI")
 
-with mlflow.start_run():
-
+with mlflow.start_run(run_id=os.environ.get("MLFLOW_RUN_ID")):
+    
     model = RandomForestClassifier(
         n_estimators=args.n_estimators,
         max_depth=max_depth,
