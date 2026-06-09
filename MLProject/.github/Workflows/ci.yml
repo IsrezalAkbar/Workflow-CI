@@ -1,0 +1,147 @@
+name: CI — Wine Quality ML Training
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ──────────────────────────────────────────────
+  # JOB 1: Training Model (BASIC + SKILLED)
+  # ──────────────────────────────────────────────
+  train:
+    name: Train Model with MLflow
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.7"
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r MLProject/requirements.txt
+
+      - name: Run MLflow Training
+        run: |
+          cd MLProject
+          python modelling.py \
+            --n_estimators 200 \
+            --max_depth 10 \
+            --min_samples_split 2 \
+            --min_samples_leaf 1
+
+      # SKILLED — Upload artefak hasil training ke GitHub Artifacts
+      - name: Upload Training Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-artifacts
+          path: |
+            MLProject/artifacts/
+            MLProject/mlruns/
+          retention-days: 7
+
+      - name: Commit MLflow Results
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add MLProject/mlruns/ MLProject/artifacts/ || true
+          git diff --staged --quiet || git commit -m "ci: update mlruns and artifacts [skip ci]"
+          git push origin HEAD:${{ github.ref_name }} || true
+
+  # ──────────────────────────────────────────────
+  # JOB 2: Build & Push Docker Image (ADVANCED)
+  # ──────────────────────────────────────────────
+  docker:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: train   # Jalankan setelah training selesai
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.7"
+
+      - name: Install MLflow & Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install mlflow==2.19.0 scikit-learn==1.5.2 pandas==2.2.3 numpy==1.26.4
+
+      - name: Re-train Model (for Docker build)
+        run: |
+          cd MLProject
+          python modelling.py \
+            --n_estimators 200 \
+            --max_depth 10 \
+            --min_samples_split 2 \
+            --min_samples_leaf 1
+
+      - name: Get Latest MLflow Run ID
+        id: get_run
+        run: |
+          python - <<'PYEOF'
+          import mlflow
+          import os
+          mlflow.set_tracking_uri("MLProject/mlruns")
+          client = mlflow.MlflowClient(tracking_uri="MLProject/mlruns")
+          experiment = client.get_experiment_by_name("Wine_Quality_CI")
+          if experiment:
+              runs = client.search_runs(
+                  experiment_ids=[experiment.experiment_id],
+                  order_by=["start_time DESC"],
+                  max_results=1
+              )
+              if runs:
+                  run_id = runs[0].info.run_id
+                  print(f"Latest run_id: {run_id}")
+                  with open(os.environ["GITHUB_ENV"], "a") as f:
+                      f.write(f"RUN_ID={run_id}\n")
+              else:
+                  print("No runs found")
+          else:
+              print("Experiment not found")
+          PYEOF
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker Image with MLflow
+        run: |
+          cd MLProject
+          mlflow models build-docker \
+            --model-uri "mlruns/$(ls mlruns/ | grep -v '0' | head -1)/$(ls mlruns/$(ls mlruns/ | grep -v '0' | head -1)/ | grep -v 'meta.yaml' | head -1)/artifacts/model" \
+            --name ${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-model \
+            --enable-mlserver
+
+      - name: Push Docker Image to Docker Hub
+        run: |
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-model:latest \
+                     ${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-model:${{ github.sha }}
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-model:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-model:${{ github.sha }}
+
+      - name: Docker Image Summary
+        run: |
+          echo "✔ Docker image pushed:"
+          echo "  ${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-model:latest"
+          echo "  ${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-model:${{ github.sha }}"
