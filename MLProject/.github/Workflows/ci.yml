@@ -8,7 +8,7 @@ on:
 
 jobs:
   # ============================================================
-  # JOB 1: Train Model with MLflow  (BASIC + SKILLED)
+  # JOB: Train Model with MLflow  (BASIC + SKILLED)
   # ============================================================
   train:
     runs-on: ubuntu-latest
@@ -32,52 +32,9 @@ jobs:
           cd MLProject
           mlflow run . --env-manager=local
 
-      - name: Upload mlruns artifact         # SKILLED ⭐⭐⭐
+      - name: Upload mlruns artifact
         uses: actions/upload-artifact@v4
         with:
           name: mlruns
           path: MLProject/mlruns/
           retention-days: 7
-
-      - name: Commit mlruns to repo
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add MLProject/mlruns/ || true
-          git diff --staged --quiet || git commit -m "ci: save mlruns after training [skip ci]"
-          git push || true
-
-  # ============================================================
-  # JOB 2: Build & Push Docker Image  (ADVANCED ⭐⭐⭐⭐)
-  # ============================================================
-  docker:
-    runs-on: ubuntu-latest
-    needs: train
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download mlruns artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: mlruns
-          path: MLProject/mlruns/
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build Docker image
-        run: |
-          docker build \
-            -t ${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-model:latest \
-            -t ${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-model:${{ github.sha }} \
-            ./MLProject
-
-      - name: Push Docker image to Docker Hub
-        run: |
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-model:latest
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-model:${{ github.sha }}
